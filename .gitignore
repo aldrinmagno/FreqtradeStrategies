@@ -1,1 +1,4 @@
 .env
+tradesv3.sqlite
+tradesv3.sqlite-shm
+tradesv3.sqlite-wal
