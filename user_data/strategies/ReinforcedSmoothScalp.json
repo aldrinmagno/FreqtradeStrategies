@@ -1,29 +1,6 @@
 {
   "strategy_name": "ReinforcedSmoothScalp",
   "params": {
-    "buy": {
-      "buy_adx": 50,
-      "buy_adx_enabled": true,
-      "buy_fastd": 21,
-      "buy_fastd_enabled": true,
-      "buy_fastk": 40,
-      "buy_fastk_enabled": true,
-      "buy_mfi": 18,
-      "buy_mfi_enabled": false
-    },
-    "sell": {
-      "sell_adx": 73,
-      "sell_adx_enabled": true,
-      "sell_cci": 177,
-      "sell_cci_enabled": true,
-      "sell_fastd": 92,
-      "sell_fastd_enabled": false,
-      "sell_fastk": 50,
-      "sell_fastk_enabled": true,
-      "sell_mfi": 92,
-      "sell_mfi_enabled": false
-    },
-    "protection": {},
     "roi": {
       "0": 0.359,
       "103": 0.098,
@@ -38,8 +15,31 @@
       "trailing_stop_positive": 0.015,
       "trailing_stop_positive_offset": 0.086,
       "trailing_only_offset_is_reached": false
-    }
+    },
+    "buy": {
+      "buy_adx": 28,
+      "buy_adx_enabled": false,
+      "buy_fastd": 34,
+      "buy_fastd_enabled": false,
+      "buy_fastk": 27,
+      "buy_fastk_enabled": true,
+      "buy_mfi": 25,
+      "buy_mfi_enabled": false
+    },
+    "sell": {
+      "sell_adx": 73,
+      "sell_adx_enabled": true,
+      "sell_cci": 177,
+      "sell_cci_enabled": true,
+      "sell_fastd": 92,
+      "sell_fastd_enabled": false,
+      "sell_fastk": 50,
+      "sell_fastk_enabled": true,
+      "sell_mfi": 92,
+      "sell_mfi_enabled": false
+    },
+    "protection": {}
   },
   "ft_stratparam_v": 1,
-  "export_time": "2022-11-25 20:10:04.468100+00:00"
+  "export_time": "2022-11-29 19:02:45.255370+00:00"
 }

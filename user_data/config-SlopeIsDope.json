@@ -2,12 +2,12 @@
 {
     "max_open_trades": -1,
     "stake_currency": "USDT",
-    "stake_amount": 1000,
+    "stake_amount": 2000,
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
-    "timeframe": "15m",
+    "timeframe": "4h",
     "dry_run": true,
-    "dry_run_wallet": 1500,
+    "dry_run_wallet": 15000,
     "cancel_open_orders_on_exit": false,
     "trading_mode": "spot",
     "margin_mode": "isolated",
@@ -88,40 +88,11 @@
           "AUD/USDT",
           "XMR/USDT",
           "BAL/USDT",
-          "MFT/USDT",
-          "NEBL/USDT",
-          "ALGO/USDT",
-          "AUTO/USDT",
-          "BETA/USDT",
-          "FTM/USDT",
-          "SFP/USDT",
-          "GALA/USDT",
-          "AR/USDT",
-          "BAND/USDT",
-          "KLAY/USDT",
-          "PEOPLE/USDT",
-          "WAVES/USDT",
-          "RLC/USDT",
-          "EOS/USDT",
-          "DASH/USDT",
-          "DF/USDT",
-          "QNT/USDT",
-          "ENS/USDT",
-          "FLOW/USDT",
-          "FIDA/USDT",
-          "ZIL/USDT",
-          "VET/USDT",
-          "REQ/USDT",
-          "REEF/USDT",
-          "INJ/USDT",
-          "RAY/USDT",
-          "WOO/USDT",
-          "UNFI/USDT",
-          "ACA/USDT",
-          "ZRX/USDT",
-          "BADGER/USDT"
+          "MFT/USDT"
         ],
         "pair_blacklist": [
+          "SUPER/USDT",
+          "OMG/USDT"
         ]
     },
     "pairlists": [
@@ -149,9 +120,9 @@
     },
     "trailing": {
       "trailing_stop": true,
-      "trailing_stop_positive": 0.015,
-      "trailing_stop_positive_offset": 0.086,
-      "trailing_only_offset_is_reached": false
+      "trailing_stop_positive": 0.03,
+      "trailing_stop_positive_offset": 0.28,
+      "trailing_only_offset_is_reached": true
     },
     "telegram": {
         "enabled": false,
@@ -167,8 +138,8 @@
         "jwt_secret_key": "0c60bc875d6ca9ef7769e0844169fc071d52a65590d7dc6e0453a2aeea522ad8",
         "ws_token": "Of_3-c2bmkSnEMdsqWlGtXZ3QjYBlzruQw",
         "CORS_origins": [],
-        "username": "ReinforcedSmoothScalp",
-        "password": "dPajhLZ5XPUc5gA2PxiA"
+        "username": "SlopeIsDope",
+        "password": "DY27z4SY"
     },
     "bot_name": "freqtrade",
     "initial_state": "running",

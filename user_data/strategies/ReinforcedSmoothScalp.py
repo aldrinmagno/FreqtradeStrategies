@@ -22,13 +22,16 @@ class ReinforcedSmoothScalp(IStrategy):
     # Minimal ROI designed for the strategy.
     # This attribute will be overridden if the config file contains "minimal_roi"
     minimal_roi = {
-        "0": 0.02
+      "0": 0.359,
+      "103": 0.098,
+      "136": 0.042,
+      "358": 0
     }
     # Optimal stoploss designed for the strategy
     # This attribute will be overridden if the config file contains "stoploss"
     # should not be below 3% loss
 
-    stoploss = -0.09
+    stoploss = -0.321
     # Optimal timeframe for the strategy
     # the shorter the better
     timeframe = '15m'
