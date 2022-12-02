@@ -22,16 +22,13 @@ class ReinforcedSmoothScalp(IStrategy):
     # Minimal ROI designed for the strategy.
     # This attribute will be overridden if the config file contains "minimal_roi"
     minimal_roi = {
-      "0": 0.359,
-      "103": 0.098,
-      "136": 0.042,
-      "358": 0
+      "0": 0.02,
     }
     # Optimal stoploss designed for the strategy
     # This attribute will be overridden if the config file contains "stoploss"
     # should not be below 3% loss
 
-    stoploss = -0.321
+    stoploss = -0.09
     # Optimal timeframe for the strategy
     # the shorter the better
     timeframe = '15m'
@@ -47,6 +44,8 @@ class ReinforcedSmoothScalp(IStrategy):
     buy_fastd_enabled = BooleanParameter(default=True, space='buy')
     buy_fastk_enabled = BooleanParameter(default=False, space='buy')
     buy_mfi_enabled = BooleanParameter(default=True, space='buy')
+    buy_rsi_enabled = BooleanParameter(default=True, space='buy')
+    buy_rsi = IntParameter(45, 100, default=55, space='buy')
 
     sell_adx = IntParameter(50, 100, default=53, space='sell')
     sell_cci = IntParameter(100, 200, default=183, space='sell')
@@ -59,6 +58,7 @@ class ReinforcedSmoothScalp(IStrategy):
     sell_fastd_enabled = BooleanParameter(default=True, space='sell')
     sell_fastk_enabled = BooleanParameter(default=True, space='sell')
     sell_mfi_enabled = BooleanParameter(default=False, space='sell')
+    
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         tf_res = timeframe_to_minutes(self.timeframe) * 5
@@ -77,6 +77,9 @@ class ReinforcedSmoothScalp(IStrategy):
         dataframe['cci'] = ta.CCI(dataframe, timeperiod=20)
         dataframe['rsi'] = ta.RSI(dataframe, timeperiod=14)
         dataframe['mfi'] = ta.MFI(dataframe)
+
+        dataframe['fastMA'] = ta.SMA(dataframe, timeperiod=21)
+        dataframe['slowMA'] = ta.SMA(dataframe, timeperiod=50)
 
         # required for graphing
         bollinger = qtpylib.bollinger_bands(dataframe['close'], window=20, stds=2)
@@ -97,10 +100,13 @@ class ReinforcedSmoothScalp(IStrategy):
             conditions.append(dataframe['fastk'] < self.buy_fastk.value)
         if self.buy_adx_enabled.value:
             conditions.append(dataframe['adx'] > self.buy_adx.value)
+        if self.buy_rsi_enabled.value:
+            conditions.append(dataframe['rsi'] > self.buy_rsi.value)
 
         # Some static conditions which always apply
         conditions.append(qtpylib.crossed_above(dataframe['fastk'], dataframe['fastd']))
         conditions.append(dataframe['resample_sma'] < dataframe['close'])
+        conditions.append(dataframe['fastMA'] > dataframe['slowMA'])
 
         # Check that volume is not 0
         conditions.append(dataframe['volume'] > 0)
