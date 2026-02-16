@@ -1,15 +1,18 @@
 # --- Do not remove these libs ---
-from freqtrade.strategy.interface import IStrategy
+from freqtrade.strategy import IStrategy
 from pandas import DataFrame
 # --------------------------------
 
 # Add your lib to import here
 import talib.abstract as ta
-import freqtrade.vendor.qtpylib.indicators as qtpylib
+from technical import qtpylib
 from scipy.spatial.distance import cosine
 import numpy as np
 
 class SlopeIsDope(IStrategy):
+
+    INTERFACE_VERSION: int = 3
+
     # Minimal ROI designed for the strategy.
     minimal_roi = {
         "0": 0.6
@@ -18,7 +21,7 @@ class SlopeIsDope(IStrategy):
     stoploss = -0.9
 
     timeframe = '4h'
-    
+
     # Trailing stoploss
     trailing_stop = False
     trailing_only_offset_is_reached = False
@@ -68,7 +71,7 @@ class SlopeIsDope(IStrategy):
     }
 
 
-    def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
                 # Only enter when market is bullish (this is a choice)
@@ -90,20 +93,20 @@ class SlopeIsDope(IStrategy):
                 # (qtpylib.crossed_above(dataframe['fastMA'], dataframe['slowMA']))
                 )
             ),
-            'buy'] = 1
+            'enter_long'] = 1
 
         return dataframe
 
-    def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+    def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
 
                 # Close or do not trade when fastMA is below slowMA
                 (dataframe['fastMA'] < dataframe['slowMA'])
                 # Or close position when the close price gets below the last lowest candle price configured
-                # (AKA candle based (Trailing) stoploss) 
+                # (AKA candle based (Trailing) stoploss)
                 | (dataframe['close'] < dataframe['last_lowest'])
                 # | (dataframe['close'] < dataframe['fastMA'])
             ),
-            'sell'] = 1
+            'exit_long'] = 1
         return dataframe
