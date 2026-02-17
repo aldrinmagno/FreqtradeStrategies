@@ -1,7 +1,7 @@
 # --- Do not remove these libs ---
 from functools import reduce
 from freqtrade.strategy import IStrategy
-from freqtrade.strategy import BooleanParameter, IntParameter, DecimalParameter
+from freqtrade.strategy import BooleanParameter, DecimalParameter, IntParameter
 from freqtrade.persistence import Trade
 from pandas import DataFrame
 from datetime import datetime
@@ -92,7 +92,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
     # =============================================
     # VWAP Configuration Parameters
     # =============================================
-    vwap_lookback = IntParameter(100, 300, default=200, space='buy', optimize=True)
+    VWAP_LOOKBACK = 200  # Fixed; not hyperopt-optimizable (recomputing per epoch is too expensive)
     band_outer_mult = DecimalParameter(1.5, 3.0, default=2.0, decimals=1, space='buy', optimize=True)
     band_inner_mult = DecimalParameter(0.5, 1.4, default=1.0, decimals=1, space='buy', optimize=True)
 
@@ -119,6 +119,12 @@ class VWAPBandMeanReversionScalp(IStrategy):
     sell_vwap_cross_enabled = BooleanParameter(default=True, space='sell')
     sell_upper_band_enabled = BooleanParameter(default=True, space='sell')
 
+    def _get_band_multipliers(self):
+        """Return (outer_mult, clamped_inner_mult) for band computation."""
+        outer = self.band_outer_mult.value
+        inner = min(self.band_inner_mult.value, outer - 0.1)
+        return outer, inner
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
 
         # =============================================
@@ -136,7 +142,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
         dataframe['vp'] = dataframe['typical_price'] * safe_volume
 
         # Rolling sums for VWAP
-        lookback = self.vwap_lookback.value
+        lookback = self.VWAP_LOOKBACK
         min_periods = max(1, lookback // 2)
 
         dataframe['rolling_vp_sum'] = dataframe['vp'].rolling(
@@ -171,26 +177,6 @@ class VWAPBandMeanReversionScalp(IStrategy):
 
         dataframe['vwap_std'] = np.sqrt(rolling_vw_sq_dev / rolling_vol_for_std)
 
-        # Clamp inner multiplier to stay below outer multiplier
-        outer_mult = self.band_outer_mult.value
-        inner_mult = min(self.band_inner_mult.value, outer_mult - 0.1)
-
-        # Outer bands (entry trigger zones)
-        dataframe['vwap_upper_outer'] = (
-            dataframe['vwap'] + dataframe['vwap_std'] * outer_mult
-        )
-        dataframe['vwap_lower_outer'] = (
-            dataframe['vwap'] - dataframe['vwap_std'] * outer_mult
-        )
-
-        # Inner bands (confirmation / re-entry zones)
-        dataframe['vwap_upper_inner'] = (
-            dataframe['vwap'] + dataframe['vwap_std'] * inner_mult
-        )
-        dataframe['vwap_lower_inner'] = (
-            dataframe['vwap'] - dataframe['vwap_std'] * inner_mult
-        )
-
         # =============================================
         # 3. Supporting Indicators
         # =============================================
@@ -216,24 +202,8 @@ class VWAPBandMeanReversionScalp(IStrategy):
         ).astype(int)
 
         # =============================================
-        # 4. Band Position Signals (pre-computed)
+        # 4. VWAP Cross Signal
         # =============================================
-        # Previous candle was below lower outer band
-        dataframe['prev_below_outer'] = (
-            dataframe['close'].shift(1) < dataframe['vwap_lower_outer'].shift(1)
-        ).astype(int)
-
-        # Current candle re-entered inner band from below
-        dataframe['reentry_inner'] = (
-            (dataframe['prev_below_outer'] == 1) &
-            (dataframe['close'] > dataframe['vwap_lower_inner'])
-        ).astype(int)
-
-        # Close above upper inner band (exit zone)
-        dataframe['above_upper_inner'] = (
-            dataframe['close'] > dataframe['vwap_upper_inner']
-        ).astype(int)
-
         # Close crossed above VWAP (exit trigger)
         dataframe['cross_above_vwap'] = (
             qtpylib.crossed_above(dataframe['close'], dataframe['vwap'])
@@ -249,13 +219,22 @@ class VWAPBandMeanReversionScalp(IStrategy):
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
 
+        # Compute bands on-the-fly so hyperopt can vary the multipliers
+        outer_mult, inner_mult = self._get_band_multipliers()
+        lower_outer = dataframe['vwap'] - dataframe['vwap_std'] * outer_mult
+        lower_inner = dataframe['vwap'] - dataframe['vwap_std'] * inner_mult
+
+        # Derived signals
+        prev_below_outer = dataframe['close'].shift(1) < lower_outer.shift(1)
+        reentry_inner = prev_below_outer & (dataframe['close'] > lower_inner)
+
         conditions = []
 
         # =============================================
         # Core VWAP Mean Reversion Signal (always active)
         # Previous candle stretched below the outer lower band
         # =============================================
-        conditions.append(dataframe['prev_below_outer'] == 1)
+        conditions.append(prev_below_outer)
 
         # =============================================
         # Confirmation Signals (OR logic — at least one must fire)
@@ -265,7 +244,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
 
         # Candle re-entry into inner band (stabilization)
         if self.buy_candle_reentry_enabled.value:
-            confirmations.append(dataframe['reentry_inner'] == 1)
+            confirmations.append(reentry_inner)
 
         # RSI oversold bounce
         if self.buy_rsi_enabled.value:
@@ -292,7 +271,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
         # =============================================
 
         # Price must have bounced back above the outer band (no falling knives)
-        conditions.append(dataframe['close'] > dataframe['vwap_lower_outer'])
+        conditions.append(dataframe['close'] > lower_outer)
 
         # Trend guard: do not buy in sustained downtrends (toggleable)
         if self.buy_ema_guard_enabled.value:
@@ -313,9 +292,20 @@ class VWAPBandMeanReversionScalp(IStrategy):
                 reduce(lambda x, y: x & y, conditions),
                 'enter_long'] = 1
 
+        # Persist bands in dataframe for plotting
+        dataframe['vwap_lower_outer'] = lower_outer
+        dataframe['vwap_upper_outer'] = dataframe['vwap'] + dataframe['vwap_std'] * outer_mult
+        dataframe['vwap_lower_inner'] = lower_inner
+        dataframe['vwap_upper_inner'] = dataframe['vwap'] + dataframe['vwap_std'] * inner_mult
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+
+        # Compute upper inner band on-the-fly so hyperopt can vary the multiplier
+        _, inner_mult = self._get_band_multipliers()
+        upper_inner = dataframe['vwap'] + dataframe['vwap_std'] * inner_mult
+        above_upper_inner = dataframe['close'] > upper_inner
 
         # =============================================
         # Exit signals use OR logic (any target hit triggers exit)
@@ -328,7 +318,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
 
         # Price reached upper inner band
         if self.sell_upper_band_enabled.value:
-            exit_signals.append(dataframe['above_upper_inner'] == 1)
+            exit_signals.append(above_upper_inner)
 
         # RSI overbought (momentum exhaustion)
         if self.sell_rsi_enabled.value:
