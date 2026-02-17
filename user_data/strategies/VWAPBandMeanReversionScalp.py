@@ -15,10 +15,13 @@ class VWAPBandMeanReversionScalp(IStrategy):
     """
     VWAP Band Mean Reversion Scalp
 
-    Computes rolling VWAP with standard-deviation bands on the 5m timeframe.
-    Enters long when price stretches into the outer lower band and shows
-    stabilization (re-entry into inner band, RSI bounce, or bullish candle
-    pattern). Exits when price reverts toward VWAP or reaches upper band.
+    Computes rolling VWAP with volume-weighted standard-deviation bands on
+    the 5m timeframe. Enters long when the previous candle stretched below
+    the outer lower band and at least one confirmation signal fires
+    (re-entry into inner band, RSI oversold, MFI oversold, low ADX, or
+    bullish candle pattern — combined with OR logic). Exits when any exit
+    target is reached (VWAP cross, upper band, RSI overbought, or MFI
+    overbought — also OR logic).
 
     Designed for high-frequency spot scalping with tight risk management.
     Recommended: 30+ parallel trades to cover unavoidable losses.
@@ -35,7 +38,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
         "10": 0.007,
         "20": 0.005,
         "40": 0.003,
-        "60": 0.0,
+        "60": 0.001,
     }
 
     # --- Stoploss ---
@@ -91,7 +94,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
     # =============================================
     vwap_lookback = IntParameter(100, 300, default=200, space='buy', optimize=True)
     band_outer_mult = DecimalParameter(1.5, 3.0, default=2.0, decimals=1, space='buy', optimize=True)
-    band_inner_mult = DecimalParameter(0.5, 1.5, default=1.0, decimals=1, space='buy', optimize=True)
+    band_inner_mult = DecimalParameter(0.5, 1.4, default=1.0, decimals=1, space='buy', optimize=True)
 
     # =============================================
     # Entry Confirmation Parameters
@@ -104,6 +107,7 @@ class VWAPBandMeanReversionScalp(IStrategy):
     buy_adx_enabled = BooleanParameter(default=True, space='buy')
     buy_candle_reentry_enabled = BooleanParameter(default=True, space='buy')
     buy_bullish_candle_enabled = BooleanParameter(default=False, space='buy')
+    buy_ema_guard_enabled = BooleanParameter(default=True, space='buy')
 
     # =============================================
     # Exit Parameters
@@ -151,28 +155,40 @@ class VWAPBandMeanReversionScalp(IStrategy):
         dataframe['vwap'] = dataframe['vwap'].ffill()
 
         # =============================================
-        # 2. Standard Deviation Bands around VWAP
+        # 2. Volume-Weighted Standard Deviation Bands around VWAP
         # =============================================
-        dataframe['vwap_deviation'] = dataframe['typical_price'] - dataframe['vwap']
+        # Volume-weighted variance: sum(vol * (tp - vwap)^2) / sum(vol)
+        vw_sq_deviation = safe_volume * (
+            dataframe['typical_price'] - dataframe['vwap']
+        ) ** 2
 
-        dataframe['vwap_std'] = dataframe['vwap_deviation'].rolling(
+        rolling_vw_sq_dev = vw_sq_deviation.rolling(
             window=lookback, min_periods=min_periods
-        ).std()
+        ).sum()
+        rolling_vol_for_std = safe_volume.rolling(
+            window=lookback, min_periods=min_periods
+        ).sum()
+
+        dataframe['vwap_std'] = np.sqrt(rolling_vw_sq_dev / rolling_vol_for_std)
+
+        # Clamp inner multiplier to stay below outer multiplier
+        outer_mult = self.band_outer_mult.value
+        inner_mult = min(self.band_inner_mult.value, outer_mult - 0.1)
 
         # Outer bands (entry trigger zones)
         dataframe['vwap_upper_outer'] = (
-            dataframe['vwap'] + dataframe['vwap_std'] * self.band_outer_mult.value
+            dataframe['vwap'] + dataframe['vwap_std'] * outer_mult
         )
         dataframe['vwap_lower_outer'] = (
-            dataframe['vwap'] - dataframe['vwap_std'] * self.band_outer_mult.value
+            dataframe['vwap'] - dataframe['vwap_std'] * outer_mult
         )
 
         # Inner bands (confirmation / re-entry zones)
         dataframe['vwap_upper_inner'] = (
-            dataframe['vwap'] + dataframe['vwap_std'] * self.band_inner_mult.value
+            dataframe['vwap'] + dataframe['vwap_std'] * inner_mult
         )
         dataframe['vwap_lower_inner'] = (
-            dataframe['vwap'] - dataframe['vwap_std'] * self.band_inner_mult.value
+            dataframe['vwap'] - dataframe['vwap_std'] * inner_mult
         )
 
         # =============================================
@@ -242,35 +258,45 @@ class VWAPBandMeanReversionScalp(IStrategy):
         conditions.append(dataframe['prev_below_outer'] == 1)
 
         # =============================================
-        # Confirmation Signals (hyperopt-toggleable)
+        # Confirmation Signals (OR logic — at least one must fire)
+        # Prevents catching a falling knife by requiring stabilization.
         # =============================================
+        confirmations = []
 
         # Candle re-entry into inner band (stabilization)
         if self.buy_candle_reentry_enabled.value:
-            conditions.append(dataframe['reentry_inner'] == 1)
+            confirmations.append(dataframe['reentry_inner'] == 1)
 
         # RSI oversold bounce
         if self.buy_rsi_enabled.value:
-            conditions.append(dataframe['rsi'] < self.buy_rsi.value)
+            confirmations.append(dataframe['rsi'] < self.buy_rsi.value)
 
         # MFI oversold (volume confirms selling exhaustion)
         if self.buy_mfi_enabled.value:
-            conditions.append(dataframe['mfi'] < self.buy_mfi.value)
+            confirmations.append(dataframe['mfi'] < self.buy_mfi.value)
 
         # ADX below threshold (ranging market = good for mean reversion)
         if self.buy_adx_enabled.value:
-            conditions.append(dataframe['adx'] < self.buy_adx.value)
+            confirmations.append(dataframe['adx'] < self.buy_adx.value)
 
         # Bullish candlestick pattern
         if self.buy_bullish_candle_enabled.value:
-            conditions.append(dataframe['bullish_candle'] == 1)
+            confirmations.append(dataframe['bullish_candle'] == 1)
+
+        # Require at least one confirmation to fire
+        if confirmations:
+            conditions.append(reduce(lambda x, y: x | y, confirmations))
 
         # =============================================
         # Static Filters (always active)
         # =============================================
 
-        # Trend guard: do not buy in sustained downtrends
-        conditions.append(dataframe['close'] > dataframe['ema_200'])
+        # Price must have bounced back above the outer band (no falling knives)
+        conditions.append(dataframe['close'] > dataframe['vwap_lower_outer'])
+
+        # Trend guard: do not buy in sustained downtrends (toggleable)
+        if self.buy_ema_guard_enabled.value:
+            conditions.append(dataframe['close'] > dataframe['ema_200'])
 
         # Volatility filter: avoid dead markets and flash crashes
         conditions.append(dataframe['atr_pct'] > 0.05)
@@ -291,11 +317,8 @@ class VWAPBandMeanReversionScalp(IStrategy):
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
 
-        conditions = []
-
         # =============================================
-        # Core VWAP Mean Reversion Exit
-        # Exit triggers use OR logic (any target hit)
+        # Exit signals use OR logic (any target hit triggers exit)
         # =============================================
         exit_signals = []
 
@@ -307,33 +330,25 @@ class VWAPBandMeanReversionScalp(IStrategy):
         if self.sell_upper_band_enabled.value:
             exit_signals.append(dataframe['above_upper_inner'] == 1)
 
-        # Combine exit signals with OR
+        # RSI overbought (momentum exhaustion)
+        if self.sell_rsi_enabled.value:
+            exit_signals.append(dataframe['rsi'] > self.sell_rsi.value)
+
+        # MFI overbought (volume-confirmed exhaustion)
+        if self.sell_mfi_enabled.value:
+            exit_signals.append(dataframe['mfi'] > self.sell_mfi.value)
+
+        # Combine all exit signals with OR
         if exit_signals:
             combined_exit = reduce(lambda x, y: x | y, exit_signals)
-            conditions.append(combined_exit)
         else:
             # Fallback: use VWAP cross if no exit signal enabled
-            conditions.append(dataframe['cross_above_vwap'] == 1)
+            combined_exit = (dataframe['cross_above_vwap'] == 1)
 
-        # =============================================
-        # Additional Exit Confirmations (hyperopt-toggleable)
-        # =============================================
-
-        # RSI overbought confirmation
-        if self.sell_rsi_enabled.value:
-            conditions.append(dataframe['rsi'] > self.sell_rsi.value)
-
-        # MFI overbought confirmation
-        if self.sell_mfi_enabled.value:
-            conditions.append(dataframe['mfi'] > self.sell_mfi.value)
-
-        # Check that volume is not 0
-        conditions.append(dataframe['volume'] > 0)
-
-        if conditions:
-            dataframe.loc[
-                reduce(lambda x, y: x & y, conditions),
-                'exit_long'] = 1
+        # Apply exit where any signal fires and volume is present
+        dataframe.loc[
+            combined_exit & (dataframe['volume'] > 0),
+            'exit_long'] = 1
 
         return dataframe
 
