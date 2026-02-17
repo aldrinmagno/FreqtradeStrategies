@@ -237,8 +237,9 @@ class VWAPBandMeanReversionScalp(IStrategy):
 
         # =============================================
         # Core VWAP Mean Reversion Signal (always active)
+        # Previous candle stretched below the outer lower band
         # =============================================
-        conditions.append(dataframe['close'] < dataframe['vwap_lower_outer'])
+        conditions.append(dataframe['prev_below_outer'] == 1)
 
         # =============================================
         # Confirmation Signals (hyperopt-toggleable)
