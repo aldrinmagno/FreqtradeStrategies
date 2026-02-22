@@ -1,5 +1,4 @@
 # --- Do not remove these libs ---
-from functools import reduce
 from freqtrade.strategy import IStrategy
 from freqtrade.strategy import BooleanParameter, DecimalParameter, IntParameter
 from freqtrade.persistence import Trade
@@ -228,69 +227,48 @@ class VWAPBandMeanReversionScalp(IStrategy):
         prev_below_outer = dataframe['close'].shift(1) < lower_outer.shift(1)
         reentry_inner = prev_below_outer & (dataframe['close'] > lower_inner)
 
-        conditions = []
+        # =============================================
+        # Confirmation Signals (OR logic, vectorized for hyperopt)
+        #
+        # Each signal is ANDed with its boolean toggle so that:
+        #   enabled=True  → the signal is active
+        #   enabled=False → evaluates to all-False (does not contribute)
+        #
+        # At least one enabled confirmation must fire for entry.
+        # If ALL toggles are off, confirmation is all-False → no entries.
+        # =============================================
+        confirmation = (
+            (reentry_inner & self.buy_candle_reentry_enabled.value)
+            | ((dataframe['rsi'] < self.buy_rsi.value) & self.buy_rsi_enabled.value)
+            | ((dataframe['mfi'] < self.buy_mfi.value) & self.buy_mfi_enabled.value)
+            | ((dataframe['adx'] < self.buy_adx.value) & self.buy_adx_enabled.value)
+            | ((dataframe['bullish_candle'] == 1) & self.buy_bullish_candle_enabled.value)
+        )
 
         # =============================================
-        # Core VWAP Mean Reversion Signal (always active)
-        # Previous candle stretched below the outer lower band
+        # AND-logic guard (vectorized for hyperopt)
+        #
+        # Uses (signal | (not enabled)) so that:
+        #   enabled=True  → signal must be True
+        #   enabled=False → always True (transparent / no-op)
         # =============================================
-        conditions.append(prev_below_outer)
-
-        # =============================================
-        # Confirmation Signals (OR logic — at least one must fire)
-        # Prevents catching a falling knife by requiring stabilization.
-        # =============================================
-        confirmations = []
-
-        # Candle re-entry into inner band (stabilization)
-        if self.buy_candle_reentry_enabled.value:
-            confirmations.append(reentry_inner)
-
-        # RSI oversold bounce
-        if self.buy_rsi_enabled.value:
-            confirmations.append(dataframe['rsi'] < self.buy_rsi.value)
-
-        # MFI oversold (volume confirms selling exhaustion)
-        if self.buy_mfi_enabled.value:
-            confirmations.append(dataframe['mfi'] < self.buy_mfi.value)
-
-        # ADX below threshold (ranging market = good for mean reversion)
-        if self.buy_adx_enabled.value:
-            confirmations.append(dataframe['adx'] < self.buy_adx.value)
-
-        # Bullish candlestick pattern
-        if self.buy_bullish_candle_enabled.value:
-            confirmations.append(dataframe['bullish_candle'] == 1)
-
-        # Require at least one confirmation to fire
-        if confirmations:
-            conditions.append(reduce(lambda x, y: x | y, confirmations))
+        ema_guard = (
+            (dataframe['close'] > dataframe['ema_200']) | (not self.buy_ema_guard_enabled.value)
+        )
 
         # =============================================
-        # Static Filters (always active)
+        # Combine all conditions with AND
         # =============================================
-
-        # Price must have bounced back above the outer band (no falling knives)
-        conditions.append(dataframe['close'] > lower_outer)
-
-        # Trend guard: do not buy in sustained downtrends (toggleable)
-        if self.buy_ema_guard_enabled.value:
-            conditions.append(dataframe['close'] > dataframe['ema_200'])
-
-        # Volatility filter: avoid dead markets and flash crashes
-        conditions.append(dataframe['atr_pct'] > 0.05)
-        conditions.append(dataframe['atr_pct'] < 3.0)
-
-        # VWAP must be valid
-        conditions.append(dataframe['vwap'].notna())
-
-        # Check that volume is not 0
-        conditions.append(dataframe['volume'] > 0)
-
-        if conditions:
-            dataframe.loc[
-                reduce(lambda x, y: x & y, conditions),
-                'enter_long'] = 1
+        dataframe.loc[
+            prev_below_outer                      # Core: previous candle below outer band
+            & confirmation                        # At least one confirmation must fire
+            & (dataframe['close'] > lower_outer)  # Bounced back above outer band
+            & ema_guard                           # Trend guard (toggleable)
+            & (dataframe['atr_pct'] > 0.05)      # Minimum volatility
+            & (dataframe['atr_pct'] < 3.0)       # Maximum volatility
+            & dataframe['vwap'].notna()           # VWAP must be valid
+            & (dataframe['volume'] > 0),          # Non-zero volume
+            'enter_long'] = 1
 
         # Persist bands in dataframe for plotting
         dataframe['vwap_lower_outer'] = lower_outer
@@ -305,35 +283,23 @@ class VWAPBandMeanReversionScalp(IStrategy):
         # Compute upper inner band on-the-fly so hyperopt can vary the multiplier
         _, inner_mult = self._get_band_multipliers()
         upper_inner = dataframe['vwap'] + dataframe['vwap_std'] * inner_mult
-        above_upper_inner = dataframe['close'] > upper_inner
 
         # =============================================
-        # Exit signals use OR logic (any target hit triggers exit)
+        # Exit signals (OR logic, vectorized for hyperopt)
+        #
+        # Each signal is ANDed with its boolean toggle so that:
+        #   enabled=True  → the signal is active
+        #   enabled=False → evaluates to all-False (does not contribute)
+        #
+        # When all toggles are off, no signal-based exit fires and the
+        # trade exits only via ROI / stoploss / trailing stop.
         # =============================================
-        exit_signals = []
-
-        # Price crossed above VWAP (mean reversion target reached)
-        if self.sell_vwap_cross_enabled.value:
-            exit_signals.append(dataframe['cross_above_vwap'] == 1)
-
-        # Price reached upper inner band
-        if self.sell_upper_band_enabled.value:
-            exit_signals.append(above_upper_inner)
-
-        # RSI overbought (momentum exhaustion)
-        if self.sell_rsi_enabled.value:
-            exit_signals.append(dataframe['rsi'] > self.sell_rsi.value)
-
-        # MFI overbought (volume-confirmed exhaustion)
-        if self.sell_mfi_enabled.value:
-            exit_signals.append(dataframe['mfi'] > self.sell_mfi.value)
-
-        # Combine all exit signals with OR
-        if exit_signals:
-            combined_exit = reduce(lambda x, y: x | y, exit_signals)
-        else:
-            # Fallback: use VWAP cross if no exit signal enabled
-            combined_exit = (dataframe['cross_above_vwap'] == 1)
+        combined_exit = (
+            ((dataframe['cross_above_vwap'] == 1) & self.sell_vwap_cross_enabled.value)
+            | ((dataframe['close'] > upper_inner) & self.sell_upper_band_enabled.value)
+            | ((dataframe['rsi'] > self.sell_rsi.value) & self.sell_rsi_enabled.value)
+            | ((dataframe['mfi'] > self.sell_mfi.value) & self.sell_mfi_enabled.value)
+        )
 
         # Apply exit where any signal fires and volume is present
         dataframe.loc[
