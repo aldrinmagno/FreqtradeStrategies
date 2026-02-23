@@ -176,6 +176,9 @@ class VWAPBandMeanReversionScalp(IStrategy):
 
         dataframe['vwap_std'] = np.sqrt(rolling_vw_sq_dev / rolling_vol_for_std)
 
+        # Forward-fill vwap_std to match vwap (prevents NaN gaps in band computation)
+        dataframe['vwap_std'] = dataframe['vwap_std'].ffill()
+
         # =============================================
         # 3. Supporting Indicators
         # =============================================
@@ -248,27 +251,35 @@ class VWAPBandMeanReversionScalp(IStrategy):
         # =============================================
         # AND-logic guard (vectorized for hyperopt)
         #
-        # Uses (signal | (not enabled)) so that:
-        #   enabled=True  → signal must be True
-        #   enabled=False → always True (transparent / no-op)
+        # When enabled: close must be above EMA 200
+        # When disabled: condition is transparent (all True)
         # =============================================
-        ema_guard = (
-            (dataframe['close'] > dataframe['ema_200']) | (not self.buy_ema_guard_enabled.value)
-        )
+        if self.buy_ema_guard_enabled.value:
+            ema_guard = dataframe['close'] > dataframe['ema_200']
+        else:
+            ema_guard = True
 
         # =============================================
         # Combine all conditions with AND
         # =============================================
-        dataframe.loc[
+        conditions = (
             prev_below_outer                      # Core: previous candle below outer band
             & confirmation                        # At least one confirmation must fire
             & (dataframe['close'] > lower_outer)  # Bounced back above outer band
             & ema_guard                           # Trend guard (toggleable)
             & (dataframe['atr_pct'] > 0.05)      # Minimum volatility
             & (dataframe['atr_pct'] < 3.0)       # Maximum volatility
-            & dataframe['vwap'].notna()           # VWAP must be valid
-            & (dataframe['volume'] > 0),          # Non-zero volume
-            'enter_long'] = 1
+            & (dataframe['volume'] > 0)           # Non-zero volume
+        )
+
+        # Guard against NaN leaking into the boolean mask (pandas 2.x raises
+        # ValueError if the mask contains NA). This can happen when indicator
+        # columns still have NaN from the startup period.
+        if isinstance(conditions, bool):
+            if conditions:
+                dataframe.loc[:, 'enter_long'] = 1
+        else:
+            dataframe.loc[conditions.fillna(False), 'enter_long'] = 1
 
         # Persist bands in dataframe for plotting
         dataframe['vwap_lower_outer'] = lower_outer
@@ -301,10 +312,10 @@ class VWAPBandMeanReversionScalp(IStrategy):
             | ((dataframe['mfi'] > self.sell_mfi.value) & self.sell_mfi_enabled.value)
         )
 
-        # Apply exit where any signal fires and volume is present
-        dataframe.loc[
-            combined_exit & (dataframe['volume'] > 0),
-            'exit_long'] = 1
+        # Apply exit where any signal fires and volume is present.
+        # fillna(False) guards against NaN in the mask (pandas 2.x compat).
+        conditions = combined_exit & (dataframe['volume'] > 0)
+        dataframe.loc[conditions.fillna(False), 'exit_long'] = 1
 
         return dataframe
 
