@@ -7,7 +7,7 @@ Description: Uses Heikin-Ashi candle smoothing over Bollinger Bands with a 1h RO
              and Fisher RSI exit signal. Custom progressive trailing stoploss.
 """
 
-from freqtrade.strategy import IStrategy, merge_informative_pair
+from freqtrade.strategy import IStrategy, DecimalParameter, merge_informative_pair
 from pandas import DataFrame
 import numpy as np
 import pandas_ta as pta
@@ -28,6 +28,22 @@ class ClucHAnix(IStrategy):
 
     use_exit_signal: bool = True
     exit_profit_only: bool = False
+
+    # -----------------------------------------------------------------------
+    # Buy hyperopt parameters
+    # -----------------------------------------------------------------------
+    buy_closedelta_ratio = DecimalParameter(0.5, 2.0, default=1.0, space="buy",
+                                            help="closedelta / (0.5 * bbdelta) must exceed this")
+    buy_tail_ratio = DecimalParameter(0.5, 1.5, default=1.0, space="buy",
+                                      help="tail / (0.5 * bbdelta) must be below this")
+    buy_rocr_1h = DecimalParameter(0.95, 1.1, default=1.0, space="buy",
+                                   help="1h ROCR must exceed this")
+
+    # -----------------------------------------------------------------------
+    # Sell hyperopt parameters
+    # -----------------------------------------------------------------------
+    sell_fisher_rsi = DecimalParameter(0.1, 0.8, default=0.3, space="sell",
+                                       help="Exit when Fisher RSI exceeds this")
 
     def informative_pairs(self) -> list:
         pairs = self.dp.current_whitelist()
@@ -88,11 +104,11 @@ class ClucHAnix(IStrategy):
         dataframe.loc[
             (
                 (dataframe["bbdelta"] > 0)
-                & (dataframe["closedelta"] / (0.5 * dataframe["bbdelta"]) > 1.0)
-                & (dataframe["tail"] / (0.5 * dataframe["bbdelta"]) < 1.0)
+                & (dataframe["closedelta"] / (0.5 * dataframe["bbdelta"]) > self.buy_closedelta_ratio.value)
+                & (dataframe["tail"] / (0.5 * dataframe["bbdelta"]) < self.buy_tail_ratio.value)
                 & (dataframe["ha_close"] < dataframe["ha_open"])
                 & (dataframe["ha_close"] < dataframe["ha_close"].shift(1))
-                & (dataframe[f"rocr_{self.informative_timeframe}"] > 1.0)
+                & (dataframe[f"rocr_{self.informative_timeframe}"] > self.buy_rocr_1h.value)
                 & (dataframe["volume"] > 0)
             ),
             "enter_long",
@@ -103,7 +119,7 @@ class ClucHAnix(IStrategy):
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                (dataframe["fisher_rsi"] > 0.3)
+                (dataframe["fisher_rsi"] > self.sell_fisher_rsi.value)
                 & (dataframe["volume"] > 0)
             ),
             "exit_long",

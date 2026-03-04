@@ -7,7 +7,7 @@ Description: Enters when RSI is oversold and price dips below the lower Bollinge
              exits when RSI reaches overbought territory.
 """
 
-from freqtrade.strategy import IStrategy
+from freqtrade.strategy import IStrategy, DecimalParameter, IntParameter
 from pandas import DataFrame
 import pandas_ta as pta
 
@@ -38,6 +38,18 @@ class BbandRsi(IStrategy):
     use_exit_signal: bool = True
     exit_profit_only: bool = False
 
+    # -----------------------------------------------------------------------
+    # Buy hyperopt parameters
+    # -----------------------------------------------------------------------
+    buy_rsi = IntParameter(15, 40, default=30, space="buy")
+    buy_bb_factor = DecimalParameter(0.97, 1.0, default=1.0, space="buy",
+                                     help="Entry when close < bb_lower * this factor")
+
+    # -----------------------------------------------------------------------
+    # Sell hyperopt parameters
+    # -----------------------------------------------------------------------
+    sell_rsi = IntParameter(60, 85, default=70, space="sell")
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # RSI (14)
         dataframe["rsi"] = pta.rsi(dataframe["close"], length=14)
@@ -53,8 +65,8 @@ class BbandRsi(IStrategy):
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                (dataframe["rsi"] < 30)
-                & (dataframe["close"] < dataframe["bb_lowerband"])
+                (dataframe["rsi"] < self.buy_rsi.value)
+                & (dataframe["close"] < dataframe["bb_lowerband"] * self.buy_bb_factor.value)
                 & (dataframe["volume"] > 0)
             ),
             "enter_long",
@@ -65,7 +77,7 @@ class BbandRsi(IStrategy):
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                (dataframe["rsi"] > 70)
+                (dataframe["rsi"] > self.sell_rsi.value)
                 & (dataframe["volume"] > 0)
             ),
             "exit_long",

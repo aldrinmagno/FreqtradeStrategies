@@ -14,7 +14,13 @@ Blacklisted leveraged tokens:
 """
 
 from functools import reduce
-from freqtrade.strategy import IStrategy, merge_informative_pair
+from freqtrade.strategy import (
+    IStrategy,
+    BooleanParameter,
+    DecimalParameter,
+    IntParameter,
+    merge_informative_pair,
+)
 from pandas import DataFrame
 import numpy as np
 import pandas_ta as pta
@@ -37,6 +43,80 @@ class NostalgiaForInfinityX6(IStrategy):
 
     # Informative timeframes
     inf_timeframes: list = ["15m", "1h", "1d"]
+
+    # -----------------------------------------------------------------------
+    # Buy condition toggles
+    # -----------------------------------------------------------------------
+    buy_cond_1_enabled = BooleanParameter(default=True, space="buy")
+    buy_cond_2_enabled = BooleanParameter(default=True, space="buy")
+    buy_cond_3_enabled = BooleanParameter(default=True, space="buy")
+    buy_cond_4_enabled = BooleanParameter(default=True, space="buy")
+    buy_cond_5_enabled = BooleanParameter(default=True, space="buy")
+    buy_cond_6_enabled = BooleanParameter(default=True, space="buy")
+    buy_cond_7_enabled = BooleanParameter(default=True, space="buy")
+    buy_cond_8_enabled = BooleanParameter(default=True, space="buy")
+
+    # -----------------------------------------------------------------------
+    # Buy hyperopt parameters — per condition
+    # -----------------------------------------------------------------------
+    # Condition 1 — EMA crossover + RSI
+    buy_1_rsi = IntParameter(25, 50, default=40, space="buy")
+
+    # Condition 2 — BB lower band bounce + volume
+    buy_2_rsi = IntParameter(20, 40, default=30, space="buy")
+    buy_2_mfi = IntParameter(15, 40, default=30, space="buy")
+
+    # Condition 3 — Williams %R oversold
+    buy_3_willr = IntParameter(-99, -70, default=-85, space="buy")
+    buy_3_rsi = IntParameter(20, 45, default=35, space="buy")
+
+    # Condition 4 — VWAP dip
+    buy_4_vwap_factor = DecimalParameter(0.96, 1.0, default=0.99, space="buy")
+    buy_4_rsi = IntParameter(20, 45, default=35, space="buy")
+    buy_4_rsi_1h_min = IntParameter(30, 55, default=40, space="buy")
+
+    # Condition 5 — 1h StochRSI oversold
+    buy_5_stochrsi_k = IntParameter(10, 35, default=20, space="buy")
+    buy_5_stochrsi_d = IntParameter(10, 35, default=20, space="buy")
+    buy_5_rsi = IntParameter(20, 45, default=35, space="buy")
+
+    # Condition 6 — EMA 50/200 golden zone
+    buy_6_rsi = IntParameter(15, 40, default=30, space="buy")
+    buy_6_willr_1h = IntParameter(-99, -60, default=-75, space="buy")
+
+    # Condition 7 — BB squeeze
+    buy_7_bb_width = DecimalParameter(0.02, 0.08, default=0.04, space="buy")
+    buy_7_rsi = IntParameter(20, 42, default=32, space="buy")
+    buy_7_rsi_1h_min = IntParameter(35, 60, default=45, space="buy")
+
+    # Condition 8 — Multi-TF RSI alignment
+    buy_8_rsi = IntParameter(15, 38, default=28, space="buy")
+    buy_8_rsi_15m = IntParameter(20, 45, default=35, space="buy")
+    buy_8_rsi_1h = IntParameter(30, 55, default=45, space="buy")
+
+    # -----------------------------------------------------------------------
+    # Sell hyperopt parameters
+    # -----------------------------------------------------------------------
+    # Condition 1 — RSI overbought
+    sell_1_rsi = IntParameter(60, 85, default=70, space="sell")
+
+    # Condition 2 — Williams %R overbought
+    sell_2_willr = IntParameter(-20, -3, default=-10, space="sell")
+    sell_2_rsi = IntParameter(55, 80, default=65, space="sell")
+
+    # Condition 3 — EMA bearish crossover
+    sell_3_rsi = IntParameter(50, 75, default=60, space="sell")
+
+    # Condition 4 — MFI overbought
+    sell_4_mfi = IntParameter(70, 95, default=80, space="sell")
+    sell_4_bb_factor = DecimalParameter(0.97, 1.01, default=0.99, space="sell")
+
+    # Condition 5 — 1h StochRSI overbought
+    sell_5_stochrsi = IntParameter(65, 95, default=80, space="sell")
+    sell_5_rsi = IntParameter(55, 80, default=65, space="sell")
+
+    # Derisking threshold
+    derisk_profit_threshold = DecimalParameter(-0.08, -0.01, default=-0.03, space="sell")
 
     def informative_pairs(self) -> list:
         pairs = self.dp.current_whitelist()
@@ -145,96 +225,104 @@ class NostalgiaForInfinityX6(IStrategy):
         # -----------------------------------------------------------------
         # Buy condition 1 — EMA crossover with RSI confirmation
         # -----------------------------------------------------------------
-        buy_cond_1 = (
-            (dataframe["ema_5"] > dataframe["ema_13"])
-            & (dataframe["ema_13"] > dataframe["ema_21"])
-            & (dataframe["rsi_14"] < 40)
-            & (dataframe["close"] < dataframe["bb_lowerband"])
-            & (dataframe["volume"] > 0)
-        )
-        conditions.append(buy_cond_1)
+        if self.buy_cond_1_enabled.value:
+            buy_cond_1 = (
+                (dataframe["ema_5"] > dataframe["ema_13"])
+                & (dataframe["ema_13"] > dataframe["ema_21"])
+                & (dataframe["rsi_14"] < self.buy_1_rsi.value)
+                & (dataframe["close"] < dataframe["bb_lowerband"])
+                & (dataframe["volume"] > 0)
+            )
+            conditions.append(buy_cond_1)
 
         # -----------------------------------------------------------------
         # Buy condition 2 — BB lower band bounce with volume
         # -----------------------------------------------------------------
-        buy_cond_2 = (
-            (dataframe["close"] < dataframe["bb_lowerband"])
-            & (dataframe["rsi_14"] < 30)
-            & (dataframe["mfi_14"] < 30)
-            & (dataframe["volume"] > dataframe["volume"].shift(1))
-        )
-        conditions.append(buy_cond_2)
+        if self.buy_cond_2_enabled.value:
+            buy_cond_2 = (
+                (dataframe["close"] < dataframe["bb_lowerband"])
+                & (dataframe["rsi_14"] < self.buy_2_rsi.value)
+                & (dataframe["mfi_14"] < self.buy_2_mfi.value)
+                & (dataframe["volume"] > dataframe["volume"].shift(1))
+            )
+            conditions.append(buy_cond_2)
 
         # -----------------------------------------------------------------
         # Buy condition 3 — Williams %R oversold with EMA support
         # -----------------------------------------------------------------
-        buy_cond_3 = (
-            (dataframe["willr_14"] < -85)
-            & (dataframe["close"] > dataframe["ema_200"])
-            & (dataframe["rsi_14"] < 35)
-            & (dataframe["volume"] > 0)
-        )
-        conditions.append(buy_cond_3)
+        if self.buy_cond_3_enabled.value:
+            buy_cond_3 = (
+                (dataframe["willr_14"] < self.buy_3_willr.value)
+                & (dataframe["close"] > dataframe["ema_200"])
+                & (dataframe["rsi_14"] < self.buy_3_rsi.value)
+                & (dataframe["volume"] > 0)
+            )
+            conditions.append(buy_cond_3)
 
         # -----------------------------------------------------------------
         # Buy condition 4 — VWAP dip buy
         # -----------------------------------------------------------------
-        buy_cond_4 = (
-            (dataframe["close"] < dataframe["vwap"] * 0.99)
-            & (dataframe["rsi_14"] < 35)
-            & (dataframe[f"rsi_14_1h_1h"] > 40)
-            & (dataframe["volume"] > 0)
-        )
-        conditions.append(buy_cond_4)
+        if self.buy_cond_4_enabled.value:
+            buy_cond_4 = (
+                (dataframe["close"] < dataframe["vwap"] * self.buy_4_vwap_factor.value)
+                & (dataframe["rsi_14"] < self.buy_4_rsi.value)
+                & (dataframe[f"rsi_14_1h_1h"] > self.buy_4_rsi_1h_min.value)
+                & (dataframe["volume"] > 0)
+            )
+            conditions.append(buy_cond_4)
 
         # -----------------------------------------------------------------
         # Buy condition 5 — 1h Stochastic RSI oversold
         # -----------------------------------------------------------------
-        buy_cond_5 = (
-            (dataframe[f"stochrsi_k_1h_1h"] < 20)
-            & (dataframe[f"stochrsi_d_1h_1h"] < 20)
-            & (dataframe["rsi_14"] < 35)
-            & (dataframe["close"] < dataframe["ema_50"])
-            & (dataframe["volume"] > 0)
-        )
-        conditions.append(buy_cond_5)
+        if self.buy_cond_5_enabled.value:
+            buy_cond_5 = (
+                (dataframe[f"stochrsi_k_1h_1h"] < self.buy_5_stochrsi_k.value)
+                & (dataframe[f"stochrsi_d_1h_1h"] < self.buy_5_stochrsi_d.value)
+                & (dataframe["rsi_14"] < self.buy_5_rsi.value)
+                & (dataframe["close"] < dataframe["ema_50"])
+                & (dataframe["volume"] > 0)
+            )
+            conditions.append(buy_cond_5)
 
         # -----------------------------------------------------------------
         # Buy condition 6 — EMA 50/200 golden zone with RSI
         # -----------------------------------------------------------------
-        buy_cond_6 = (
-            (dataframe["close"] < dataframe["ema_50"])
-            & (dataframe["ema_50"] > dataframe["ema_200"])
-            & (dataframe["rsi_14"] < 30)
-            & (dataframe[f"willr_14_1h_1h"] < -75)
-            & (dataframe["volume"] > 0)
-        )
-        conditions.append(buy_cond_6)
+        if self.buy_cond_6_enabled.value:
+            buy_cond_6 = (
+                (dataframe["close"] < dataframe["ema_50"])
+                & (dataframe["ema_50"] > dataframe["ema_200"])
+                & (dataframe["rsi_14"] < self.buy_6_rsi.value)
+                & (dataframe[f"willr_14_1h_1h"] < self.buy_6_willr_1h.value)
+                & (dataframe["volume"] > 0)
+            )
+            conditions.append(buy_cond_6)
 
         # -----------------------------------------------------------------
         # Buy condition 7 — BB squeeze with 1h RSI divergence
         # -----------------------------------------------------------------
-        buy_cond_7 = (
-            (dataframe["bb_width"] < 0.04)
-            & (dataframe["close"] < dataframe["bb_lowerband"])
-            & (dataframe[f"rsi_14_1h_1h"] > 45)
-            & (dataframe["rsi_14"] < 32)
-            & (dataframe["volume"] > 0)
-        )
-        conditions.append(buy_cond_7)
+        if self.buy_cond_7_enabled.value:
+            buy_cond_7 = (
+                (dataframe["bb_width"] < self.buy_7_bb_width.value)
+                & (dataframe["close"] < dataframe["bb_lowerband"])
+                & (dataframe[f"rsi_14_1h_1h"] > self.buy_7_rsi_1h_min.value)
+                & (dataframe["rsi_14"] < self.buy_7_rsi.value)
+                & (dataframe["volume"] > 0)
+            )
+            conditions.append(buy_cond_7)
 
         # -----------------------------------------------------------------
         # Buy condition 8 — Multi-timeframe RSI alignment
         # -----------------------------------------------------------------
-        buy_cond_8 = (
-            (dataframe["rsi_14"] < 28)
-            & (dataframe[f"rsi_14_15m_15m"] < 35)
-            & (dataframe[f"rsi_14_1h_1h"] < 45)
-            & (dataframe["close"] < dataframe["sma_200"])
-            & (dataframe["close"] < dataframe["bb_middleband"])
-            & (dataframe["volume"] > 0)
-        )
-        conditions.append(buy_cond_8)
+        if self.buy_cond_8_enabled.value:
+            buy_cond_8 = (
+                (dataframe["rsi_14"] < self.buy_8_rsi.value)
+                & (dataframe[f"rsi_14_15m_15m"] < self.buy_8_rsi_15m.value)
+                & (dataframe[f"rsi_14_1h_1h"] < self.buy_8_rsi_1h.value)
+                & (dataframe["close"] < dataframe["sma_200"])
+                & (dataframe["close"] < dataframe["bb_middleband"])
+                & (dataframe["volume"] > 0)
+            )
+            conditions.append(buy_cond_8)
 
         # OR all conditions together
         if conditions:
@@ -249,7 +337,7 @@ class NostalgiaForInfinityX6(IStrategy):
         # Sell condition 1 — RSI overbought
         # -----------------------------------------------------------------
         sell_cond_1 = (
-            (dataframe["rsi_14"] > 70)
+            (dataframe["rsi_14"] > self.sell_1_rsi.value)
             & (dataframe["close"] > dataframe["bb_upperband"])
             & (dataframe["volume"] > 0)
         )
@@ -259,8 +347,8 @@ class NostalgiaForInfinityX6(IStrategy):
         # Sell condition 2 — Williams %R overbought
         # -----------------------------------------------------------------
         sell_cond_2 = (
-            (dataframe["willr_14"] > -10)
-            & (dataframe["rsi_14"] > 65)
+            (dataframe["willr_14"] > self.sell_2_willr.value)
+            & (dataframe["rsi_14"] > self.sell_2_rsi.value)
             & (dataframe["volume"] > 0)
         )
         conditions.append(sell_cond_2)
@@ -271,7 +359,7 @@ class NostalgiaForInfinityX6(IStrategy):
         sell_cond_3 = (
             (dataframe["ema_5"] < dataframe["ema_13"])
             & (dataframe["ema_13"] < dataframe["ema_21"])
-            & (dataframe["rsi_14"] > 60)
+            & (dataframe["rsi_14"] > self.sell_3_rsi.value)
             & (dataframe["volume"] > 0)
         )
         conditions.append(sell_cond_3)
@@ -280,8 +368,8 @@ class NostalgiaForInfinityX6(IStrategy):
         # Sell condition 4 — MFI overbought with BB upper band
         # -----------------------------------------------------------------
         sell_cond_4 = (
-            (dataframe["mfi_14"] > 80)
-            & (dataframe["close"] > dataframe["bb_upperband"] * 0.99)
+            (dataframe["mfi_14"] > self.sell_4_mfi.value)
+            & (dataframe["close"] > dataframe["bb_upperband"] * self.sell_4_bb_factor.value)
             & (dataframe["volume"] > 0)
         )
         conditions.append(sell_cond_4)
@@ -290,9 +378,9 @@ class NostalgiaForInfinityX6(IStrategy):
         # Sell condition 5 — 1h Stochastic RSI overbought
         # -----------------------------------------------------------------
         sell_cond_5 = (
-            (dataframe[f"stochrsi_k_1h_1h"] > 80)
-            & (dataframe[f"stochrsi_d_1h_1h"] > 80)
-            & (dataframe["rsi_14"] > 65)
+            (dataframe[f"stochrsi_k_1h_1h"] > self.sell_5_stochrsi.value)
+            & (dataframe[f"stochrsi_d_1h_1h"] > self.sell_5_stochrsi.value)
+            & (dataframe["rsi_14"] > self.sell_5_rsi.value)
             & (dataframe["volume"] > 0)
         )
         conditions.append(sell_cond_5)
@@ -315,7 +403,7 @@ class NostalgiaForInfinityX6(IStrategy):
         Derisking system: if open profit drops below -3% AND the 1h EMA-21 < EMA-50
         (downtrend), trigger a sell.
         """
-        if current_profit > -0.03:
+        if current_profit > self.derisk_profit_threshold.value:
             return False
 
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
