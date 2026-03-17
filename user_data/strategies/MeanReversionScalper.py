@@ -24,10 +24,10 @@ data on 8+ liquid pairs, verify win rate > ~55% with profit factor > 1.3, and
 paper trade 2-4 weeks before using real capital. Requires fees <= 0.075% per side.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from freqtrade.persistence import Trade
-from freqtrade.strategy import IStrategy, DecimalParameter, IntParameter
+from freqtrade.strategy import IStrategy, DecimalParameter, IntParameter, merge_informative_pair
 from pandas import DataFrame
 import pandas_ta as pta
 
@@ -65,6 +65,9 @@ class MeanReversionScalper(IStrategy):
 
     # Process only new candles for performance
     process_only_new_candles: bool = True
+
+    # Enough candles for 1h EMA50 to warm up (50 * 12 five-min candles per hour)
+    startup_candle_count: int = 600
 
     # -----------------------------------------------------------------------
     # Buy hyperopt parameters
@@ -108,6 +111,12 @@ class MeanReversionScalper(IStrategy):
         pairs = self.dp.current_whitelist()
         return [(pair, self.informative_timeframe) for pair in pairs]
 
+    def populate_indicators_1h(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        """Populate indicators for the 1h informative timeframe."""
+        dataframe["ema50"] = pta.ema(dataframe["close"], length=50)
+        dataframe["ema50_slope"] = dataframe["ema50"].pct_change(periods=1)
+        return dataframe
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # -- 5m indicators --
 
@@ -130,16 +139,17 @@ class MeanReversionScalper(IStrategy):
 
         # -- 1h informative: EMA50 slope as trend filter --
         if self.dp:
-            inf_tf = self.dp.get_pair_dataframe(
+            inf_1h = self.dp.get_pair_dataframe(
                 pair=metadata["pair"], timeframe=self.informative_timeframe
             )
-            if not inf_tf.empty:
-                inf_tf["ema50"] = pta.ema(inf_tf["close"], length=50)
-                inf_tf["ema50_slope"] = inf_tf["ema50"].pct_change(periods=1)
-                # Carry forward the latest 1h EMA slope into every 5m row
-                dataframe["ema50_1h_slope"] = inf_tf["ema50_slope"].iloc[-1]
-            else:
-                dataframe["ema50_1h_slope"] = 0.0
+            inf_1h = self.populate_indicators_1h(inf_1h, metadata)
+            dataframe = merge_informative_pair(
+                dataframe, inf_1h, self.timeframe, self.informative_timeframe,
+                ffill=True,
+            )
+            dataframe.rename(
+                columns={"ema50_slope_1h": "ema50_1h_slope"}, inplace=True
+            )
         else:
             dataframe["ema50_1h_slope"] = 0.0
 
